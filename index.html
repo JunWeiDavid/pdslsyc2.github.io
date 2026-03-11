@@ -1,112 +1,193 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-  <meta charset="UTF-8">
-  <title>拍照搜题</title>
-  <style>
-    * {
-      box-sizing: border-box;
-      font-size: 16px;
-    }
-    body {
-      max-width: 600px;
-      margin: 0 auto;
-      padding: 20px;
-    }
-    .btn {
-      display: block;
-      width: 100%;
-      padding: 14px;
-      margin: 10px 0;
-      background: #0d6efd;
-      color: white;
-      border: none;
-      border-radius: 8px;
-    }
-    .result {
-      margin-top: 20px;
-      padding: 15px;
-      border: 1px solid #eee;
-      border-radius: 8px;
-    }
-    .answer {
-      color: #0d6efd;
-      font-weight: bold;
-    }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>拍照搜题</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: system-ui, sans-serif;
+        }
+        body {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 24px;
+            border-radius: 16px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            font-size: 22px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        .camera-box {
+            border: 2px dashed #ccc;
+            border-radius: 12px;
+            padding: 30px 20px;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        #captureBtn {
+            padding: 12px 24px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        #captureBtn:active {
+            background: #0066dd;
+        }
+        #result {
+            margin-top: 20px;
+            padding: 16px;
+            background: #f9f9f9;
+            border-radius: 8px;
+            white-space: pre-wrap;
+        }
+        .hidden {
+            display: none;
+        }
+        video, canvas {
+            max-width: 100%;
+            border-radius: 8px;
+            margin: 10px 0;
+        }
+    </style>
 </head>
 <body>
 
-<h2>📷 拍照搜题（单选/多选）</h2>
+<div class="container">
+    <h1>拍照搜题</h1>
 
-<button class="btn" onclick="openCamera()">拍照 / 从相册选图</button>
-<input type="file" id="fileInput" accept="image/*" capture="camera" style="display:none">
+    <div class="camera-box">
+        <video id="video" autoplay playsinline></video>
+        <canvas id="canvas" class="hidden"></canvas>
+        <button id="captureBtn">打开相机 / 拍照</button>
+    </div>
 
-<div class="result" id="result"></div>
+    <div id="result"></div>
+</div>
 
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5"></script>
 <script>
-  let questions = [];
-  const result = document.getElementById('result');
+// ======================================
+// 1. 调用摄像头拍照
+// ======================================
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const captureBtn = document.getElementById('captureBtn');
+const resultDiv = document.getElementById('result');
 
-  // 加载题库 JSON
-  fetch('./questions.json')
-    .then(res => res.json())
-    .then(data => {
-      questions = data;
-      console.log('题库加载完成，共 ' + questions.length + ' 题');
-    });
+let isCameraOpen = false;
 
-  function openCamera() {
-    document.getElementById('fileInput').click();
-  }
-
-  document.getElementById('fileInput').addEventListener('change', async e => {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    result.innerHTML = '⌛ 正在识别图片...';
-
-    const { data: { text } } = await Tesseract.recognize(file, 'chi_sim+eng');
-    result.innerHTML = '✅ 识别完成<br>正在匹配题库...';
-
-    const best = searchQuestion(text.trim());
-    showResult(best);
-  });
-
-  // 简单匹配：找包含文字最多的题目
-  function searchQuestion(ocrText) {
-    let best = null;
-    let maxCount = 0;
-
-    questions.forEach(q => {
-      const title = q.title || '';
-      const words = ocrText.split(/\s+/).filter(w => w.length > 2);
-      let count = 0;
-      words.forEach(w => {
-        if (title.includes(w)) count++;
+captureBtn.addEventListener('click', async () => {
+  if (!isCameraOpen) {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' }
       });
-      if (count > maxCount) {
-        maxCount = count;
-        best = q;
-      }
-    });
-    return best;
-  }
-
-  function showResult(q) {
-    if (!q) {
-      result.innerHTML = '❌ 未找到匹配题目';
-      return;
+      video.srcObject = stream;
+      video.classList.remove('hidden');
+      captureBtn.textContent = '拍照识别';
+      isCameraOpen = true;
+    } catch (e) {
+      resultDiv.textContent = '相机权限错误：' + e.message;
     }
-
-    let html = `<h3>${q.title}</h3>`;
-    q.options.forEach(opt => {
-      html += `<p>${opt}</p>`;
-    });
-    html += `<p class="answer">答案：${q.answer}</p>`;
-    result.innerHTML = html;
+  } else {
+    // 拍照
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0);
+    recognizeImage(canvas);
   }
+});
+
+// ======================================
+// 2. 图片 OCR 文字识别（使用 Tesseract.js 浏览器端）
+// ======================================
+async function recognizeImage(canvas) {
+  resultDiv.textContent = '识别中...';
+  
+  // 加载 Tesseract
+  const script = document.createElement('script');
+  script.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+  await new Promise(resolve => script.onload = resolve);
+  document.head.appendChild(script);
+
+  const { createWorker } = Tesseract;
+  const worker = await createWorker('chi_sim+eng');
+  const { data: { text } } = await worker.recognize(canvas);
+  await worker.terminate();
+
+  resultDiv.textContent = '识别题目：\n' + text + '\n\n正在匹配答案...';
+  
+  // 去匹配题库
+  searchQuestion(text.trim());
+}
+
+// ======================================
+// 3. 加载本地题库并匹配
+// ======================================
+let questions = [];
+
+async function loadQuestions() {
+  try {
+    const res = await fetch('./questions.json');
+    questions = await res.json();
+  } catch (e) {
+    console.error('加载题库失败', e);
+  }
+}
+
+function searchQuestion(ocrText) {
+  if (!questions.length) {
+    resultDiv.textContent += '\n错误：未加载题库';
+    return;
+  }
+
+  const minMatch = 8;
+  let best = null;
+  let maxCount = 0;
+
+  for (const q of questions) {
+    const qText = (q.question || '').trim();
+    const words = ocrText.split(/\s+/).filter(w => w.length > 1);
+    let count = 0;
+    for (const w of words) {
+      if (qText.includes(w)) count++;
+    }
+    if (count > maxCount && count >= minMatch) {
+      maxCount = count;
+      best = q;
+    }
+  }
+
+  if (best) {
+    resultDiv.textContent = `
+✅ 找到匹配题目：
+${best.question}
+
+📝 答案：
+${best.answer}
+    `.trim();
+  } else {
+    resultDiv.textContent += '\n\n❌ 未找到匹配题目';
+  }
+}
+
+// 页面加载时自动加载题库
+loadQuestions();
 </script>
+
 </body>
 </html>
