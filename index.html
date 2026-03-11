@@ -55,6 +55,8 @@
             border-radius: 8px;
             white-space: pre-wrap;
             min-height: 80px;
+            font-size: 14px;
+            line-height: 1.5;
         }
         .hidden {
             display: none !important;
@@ -72,6 +74,20 @@
             color: #666;
             font-size: 14px;
             margin-top: 10px;
+        }
+        .loading {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #fff;
+            border-radius: 50%;
+            border-top-color: #007bff;
+            animation: spin 1s ease-in-out infinite;
+            vertical-align: middle;
+            margin-right: 8px;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
         }
     </style>
 </head>
@@ -102,53 +118,83 @@ const captureBtn = document.getElementById('captureBtn');
 const uploadBtn = document.getElementById('uploadBtn');
 const fileInput = document.getElementById('fileInput');
 const resultDiv = document.getElementById('result');
-let stream = null; // 保存摄像头流，用于关闭
+let stream = null; 
 let isCameraOpen = false;
-let questions = []; // 存储你的 questions.json 题库数据
+let questions = []; 
+let ocrWorker = null; // 全局OCR Worker，避免重复创建
+let cleanedQuestions = []; // 预清理的题库，提升匹配速度
 
 // ========================
-// 1. 页面加载时自动加载你的题库文件
+// 1. 页面加载时初始化（预加载OCR+题库）
 // ========================
 window.addEventListener('DOMContentLoaded', async () => {
-  await loadQuestions();
+  // 并行加载OCR和题库，提升初始化速度
+  await Promise.all([
+    initOcrWorker(), // 提前初始化OCR，避免拍照后加载
+    loadQuestions()   // 加载并预处理题库
+  ]);
 });
 
-// 加载 questions.json 题库（核心：仅加载你的文件，无测试数据）
+// 预初始化OCR Worker（关键优化：只初始化一次）
+async function initOcrWorker() {
+  try {
+    ocrWorker = await Tesseract.createWorker({
+      logger: m => {
+        if (m.status === 'recognizing text') {
+          resultDiv.textContent = `📝 识别中：${Math.round(m.progress * 100)}%`;
+        }
+      },
+      cachePath: './tesseract-cache' // 缓存语言包，避免重复下载
+    });
+    await ocrWorker.loadLanguage('chi_sim+eng');
+    await ocrWorker.initialize('chi_sim+eng');
+  } catch (e) {
+    resultDiv.textContent = `⚠️ OCR初始化失败：${e.message}`;
+    console.error('OCR初始化错误：', e);
+  }
+}
+
+// 加载并预处理题库（关键优化：提前清理题库文字，避免每次匹配重复处理）
 async function loadQuestions() {
   try {
-    // 直接请求同目录下的 questions.json
     const res = await fetch('./questions.json');
     if (!res.ok) throw new Error(`题库文件加载失败，状态码：${res.status}`);
     
-    // 【关键修复】读取根对象中的 questions 数组
     const data = await res.json();
-    questions = data.questions; // 原代码是 questions = await res.json()
+    questions = data.questions || [];
     
-    // 验证题库格式（确保是数组）
     if (!Array.isArray(questions)) throw new Error('题库格式错误，必须是包含 questions 数组的 JSON 对象');
     
-    // 提示加载成功
-    resultDiv.textContent = `✅ 已成功加载你的题库，共 ${questions.length} 道题目，可开始搜题`;
+    // 预处理题库：提前清理文字，存入cleanedQuestions
+    cleanedQuestions = questions.map(q => {
+      if (!q.title || !q.answer) return null;
+      // 提前清理题目文字，后续匹配直接使用
+      const cleanTitle = q.title.replace(/[\n\r\s]+/g, ' ').replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, ' ').trim();
+      return {
+        ...q,
+        cleanTitle: cleanTitle,
+        titleWords: cleanTitle.split(/\s+/).filter(w => w.length >= 2) // 提前拆分关键词
+      };
+    }).filter(Boolean); // 过滤无效题目
+    
+    resultDiv.textContent = `✅ 已成功加载你的题库，共 ${cleanedQuestions.length} 道有效题目，可开始搜题`;
   } catch (e) {
-    // 明确提示题库加载问题
     resultDiv.textContent = `⚠️ 题库加载失败：${e.message}\n请检查：1. questions.json 是否和 index.html 在同一目录 2. 文件格式是否为合法 JSON（包含 questions 数组）`;
     console.error('题库加载错误详情：', e);
   }
 }
 
 // ========================
-// 2. 摄像头拍照逻辑
+// 2. 摄像头拍照逻辑（无改动，仅调用优化后的识别函数）
 // ========================
 captureBtn.addEventListener('click', async () => {
   if (!isCameraOpen) {
-    // 打开摄像头
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         resultDiv.textContent = '❌ 你的浏览器不支持摄像头功能，请使用 Chrome/Edge/微信浏览器';
         return;
       }
       
-      // 申请后置摄像头权限
       stream = await navigator.mediaDevices.getUserMedia({
         video: { 
           facingMode: { ideal: 'environment' },
@@ -163,7 +209,6 @@ captureBtn.addEventListener('click', async () => {
       resultDiv.textContent = '✅ 摄像头已打开，请对准题目后点击「点击拍照」';
       isCameraOpen = true;
     } catch (e) {
-      // 精准的权限/设备错误提示
       if (e.name === 'NotAllowedError') {
         resultDiv.textContent = '❌ 相机权限被拒绝！请在浏览器设置中开启相机权限';
       } else if (e.name === 'NotFoundError') {
@@ -173,23 +218,19 @@ captureBtn.addEventListener('click', async () => {
       }
     }
   } else {
-    // 拍照并识别
     captureBtn.disabled = true;
     captureBtn.textContent = '处理中...';
     takePhotoAndRecognize();
   }
 });
 
-// 拍照 + 识别核心函数
 async function takePhotoAndRecognize() {
   try {
-    // 绘制到 canvas 完成拍照
     canvas.width = video.videoWidth || 1280;
     canvas.height = video.videoHeight || 720;
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     
-    // 关闭摄像头释放资源
     if (stream) {
       stream.getTracks().forEach(track => track.stop());
       video.classList.add('hidden');
@@ -198,7 +239,6 @@ async function takePhotoAndRecognize() {
       captureBtn.textContent = '打开相机';
     }
     
-    // 开始 OCR 识别
     resultDiv.textContent = '📸 已拍照，正在识别题目文字...';
     await recognizeImage(canvas);
   } catch (e) {
@@ -209,7 +249,7 @@ async function takePhotoAndRecognize() {
 }
 
 // ========================
-// 3. 上传图片搜题（备用方案）
+// 3. 上传图片搜题（无改动）
 // ========================
 uploadBtn.addEventListener('click', () => {
   fileInput.click();
@@ -236,33 +276,26 @@ fileInput.addEventListener('change', async (e) => {
 });
 
 // ========================
-// 4. OCR 文字识别
+// 4. OCR识别（优化：复用全局Worker，提升速度）
 // ========================
 async function recognizeImage(canvas) {
   try {
-    // 初始化 Tesseract（中文+英文识别）
-    const worker = await Tesseract.createWorker({
-      logger: m => {
-        // 显示识别进度
-        if (m.status === 'recognizing text') {
-          resultDiv.textContent = `📝 识别中：${Math.round(m.progress * 100)}%`;
-        }
-      }
-    });
-    await worker.loadLanguage('chi_sim+eng');
-    await worker.initialize('chi_sim+eng');
+    // 检查OCR Worker是否初始化成功
+    if (!ocrWorker) {
+      resultDiv.textContent = '❌ OCR未初始化，请刷新页面重试';
+      return;
+    }
     
-    // 识别图片中的文字
-    const { data: { text } } = await worker.recognize(canvas);
-    await worker.terminate(); // 释放资源
+    // 识别图片（复用已初始化的Worker，无需重复加载语言包）
+    const { data: { text } } = await ocrWorker.recognize(canvas);
     
     if (!text.trim()) {
       resultDiv.textContent = '❌ 未识别到任何文字，请确保题目清晰、光线充足';
       return;
     }
     
-    resultDiv.textContent = `✅ 识别到题目文字：\n${text}\n\n🔍 正在匹配你的题库...`;
-    // 匹配你的题库
+    resultDiv.textContent = `✅ 识别到题目文字：\n${text}\n\n🔍 正在快速匹配题库...`;
+    // 立即开始匹配（优化后的匹配逻辑）
     searchQuestion(text.trim());
   } catch (e) {
     resultDiv.textContent = '❌ 文字识别失败：' + e.message;
@@ -271,55 +304,64 @@ async function recognizeImage(canvas) {
 }
 
 // ========================
-// 5. 匹配你的题库（无测试数据，仅匹配你的 questions.json）
+// 5. 匹配题库（核心优化：提升匹配效率）
 // ========================
 function searchQuestion(ocrText) {
   // 检查题库是否加载成功
-  if (!questions.length) {
+  if (!cleanedQuestions.length) {
     resultDiv.textContent += '\n\n❌ 你的题库为空或加载失败，请检查 questions.json 文件';
     return;
   }
 
-  // 清理识别的文字（去除无关字符，提升匹配准确率）
+  // 清理识别的文字（仅做一次）
   const cleanOcrText = ocrText.replace(/[\n\r\s]+/g, ' ').replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, ' ').trim();
-  const ocrWords = cleanOcrText.split(/\s+/).filter(w => w.length >= 2); // 仅保留有效关键词
+  const ocrWords = cleanOcrText.split(/\s+/).filter(w => w.length >= 2);
+  
+  // 无有效关键词，直接返回
+  if (ocrWords.length < 2) {
+    resultDiv.textContent = `
+✅ 识别到的文字：
+${ocrText}
+
+❌ 识别到的有效关键词不足，请确保题目清晰
+    `.trim();
+    return;
+  }
 
   let bestMatch = null;
   let maxScore = 0;
 
-  // 遍历你的题库进行匹配
-  questions.forEach(q => {
-    // 跳过格式不完整的题目（需包含 title 和 answer 字段）
-    if (!q.title || !q.answer) return;
-    
-    // 【优化】清理题库中的题目文字（使用 title 字段）
-    const cleanQText = q.title.replace(/[\n\r\s]+/g, ' ').replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, ' ').trim();
-    // 计算匹配得分（匹配的关键词数量）
+  // 优化匹配逻辑：使用预清理的题库，减少重复计算
+  cleanedQuestions.forEach(q => {
     let score = 0;
+    // 仅遍历OCR关键词，而非题目文字，提升速度
     ocrWords.forEach(word => {
-      if (cleanQText.includes(word)) score += 1;
+      if (q.cleanTitle.includes(word)) {
+        score += 1;
+        // 提前终止：匹配到足够多关键词时，无需继续计算
+        if (score >= ocrWords.length) return false;
+      }
     });
     
-    // 保留得分最高的匹配结果（至少匹配2个关键词）
     if (score > maxScore && score >= 2) {
       maxScore = score;
       bestMatch = q;
     }
   });
 
-  // 显示最终匹配结果
+  // 显示结果（增加匹配度百分比，更直观）
   if (bestMatch) {
-    // 【优化】显示题目类型和完整选项
+    const matchRate = Math.round((maxScore / ocrWords.length) * 100);
     let optionsText = '';
-    for (const [key, value] of Object.entries(bestMatch.options)) {
+    for (const [key, value] of Object.entries(bestMatch.options || {})) {
       optionsText += `\n${key}：${value}`;
     }
     
     resultDiv.textContent = `
-✅ 匹配到题目（匹配度：${maxScore}）：
-【类型】：${bestMatch.type}
+✅ 匹配成功（匹配度：${matchRate}%）：
+【类型】：${bestMatch.type || '未知'}
 【题目】：${bestMatch.title}
-【选项】：${optionsText}
+【选项】：${optionsText || '无'}
 【答案】：${bestMatch.answer}
     `.trim();
   } else {
@@ -327,9 +369,9 @@ function searchQuestion(ocrText) {
 ✅ 识别到的文字：
 ${ocrText}
 
-❌ 未在你的题库中找到匹配题目，请检查：
-1. 题目是否存在于 questions.json 中
-2. 图片识别的文字是否准确（可尝试重新拍照/上传清晰图片）
+❌ 未匹配到题目，请检查：
+1. 题目是否在 questions.json 中
+2. 图片是否清晰（可尝试裁剪题目区域后重新上传）
     `.trim();
   }
 }
@@ -341,10 +383,12 @@ window.addEventListener('beforeunload', () => {
   if (stream) {
     stream.getTracks().forEach(track => track.stop());
   }
+  // 释放OCR Worker资源
+  if (ocrWorker) {
+    ocrWorker.terminate();
+  }
 });
 </script>
 
 </body>
 </html>
-
-
