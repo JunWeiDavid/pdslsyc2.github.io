@@ -104,49 +104,76 @@ const fileInput = document.getElementById('fileInput');
 const resultDiv = document.getElementById('result');
 let stream = null; // 保存摄像头流，用于关闭
 let isCameraOpen = false;
+let questions = []; // 存储你的 questions.json 题库数据
 
 // ========================
-// 1. 摄像头相关逻辑（修复核心问题）
+// 1. 页面加载时自动加载你的题库文件
+// ========================
+window.addEventListener('DOMContentLoaded', async () => {
+  await loadQuestions();
+});
+
+// 加载 questions.json 题库（核心：仅加载你的文件，无测试数据）
+async function loadQuestions() {
+  try {
+    // 直接请求同目录下的 questions.json
+    const res = await fetch('./questions.json');
+    if (!res.ok) throw new Error(`题库文件加载失败，状态码：${res.status}`);
+    
+    // 解析你的题库数据
+    questions = await res.json();
+    
+    // 验证题库格式（确保是数组）
+    if (!Array.isArray(questions)) throw new Error('题库格式错误，必须是 JSON 数组');
+    
+    // 提示加载成功
+    resultDiv.textContent = `✅ 已成功加载你的题库，共 ${questions.length} 道题目，可开始搜题`;
+  } catch (e) {
+    // 明确提示题库加载问题
+    resultDiv.textContent = `⚠️ 题库加载失败：${e.message}\n请检查：1. questions.json 是否和 index.html 在同一目录 2. 文件格式是否为合法 JSON 数组`;
+    console.error('题库加载错误详情：', e);
+  }
+}
+
+// ========================
+// 2. 摄像头拍照逻辑
 // ========================
 captureBtn.addEventListener('click', async () => {
   if (!isCameraOpen) {
-    // 第一步：打开摄像头
+    // 打开摄像头
     try {
-      // 检测是否支持 HTTPS/本地环境
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        resultDiv.textContent = '❌ 您的浏览器不支持摄像头功能，请使用现代浏览器（Chrome/Edge/微信浏览器）';
+        resultDiv.textContent = '❌ 你的浏览器不支持摄像头功能，请使用 Chrome/Edge/微信浏览器';
         return;
       }
       
-      // 申请摄像头权限（强制后置摄像头）
+      // 申请后置摄像头权限
       stream = await navigator.mediaDevices.getUserMedia({
         video: { 
-          facingMode: { ideal: 'environment' }, // 优先后置摄像头
+          facingMode: { ideal: 'environment' },
           width: { ideal: 1280 },
           height: { ideal: 720 }
         }
       });
       
-      // 显示视频流
       video.srcObject = stream;
       video.classList.remove('hidden');
       captureBtn.textContent = '点击拍照';
       resultDiv.textContent = '✅ 摄像头已打开，请对准题目后点击「点击拍照」';
       isCameraOpen = true;
     } catch (e) {
-      // 详细的错误提示，方便排查
+      // 精准的权限/设备错误提示
       if (e.name === 'NotAllowedError') {
-        resultDiv.textContent = '❌ 相机权限被拒绝！请在浏览器设置中开启相机权限，或检查系统权限';
+        resultDiv.textContent = '❌ 相机权限被拒绝！请在浏览器设置中开启相机权限';
       } else if (e.name === 'NotFoundError') {
-        resultDiv.textContent = '❌ 未检测到摄像头！请确认设备有摄像头，且未被其他应用占用';
+        resultDiv.textContent = '❌ 未检测到摄像头！请确认设备有摄像头且未被占用';
       } else {
         resultDiv.textContent = '❌ 打开相机失败：' + e.message;
       }
-      console.error('摄像头错误：', e);
     }
   } else {
-    // 第二步：拍照并识别
-    captureBtn.disabled = true; // 防止重复点击
+    // 拍照并识别
+    captureBtn.disabled = true;
     captureBtn.textContent = '处理中...';
     takePhotoAndRecognize();
   }
@@ -155,13 +182,13 @@ captureBtn.addEventListener('click', async () => {
 // 拍照 + 识别核心函数
 async function takePhotoAndRecognize() {
   try {
-    // 绘制到 canvas（拍照）
+    // 绘制到 canvas 完成拍照
     canvas.width = video.videoWidth || 1280;
     canvas.height = video.videoHeight || 720;
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     
-    // 关闭摄像头（节省资源）
+    // 关闭摄像头释放资源
     if (stream) {
       stream.getTracks().forEach(track => track.stop());
       video.classList.add('hidden');
@@ -170,8 +197,8 @@ async function takePhotoAndRecognize() {
       captureBtn.textContent = '打开相机';
     }
     
-    // 开始识别
-    resultDiv.textContent = '📸 已拍照，正在识别文字...';
+    // 开始 OCR 识别
+    resultDiv.textContent = '📸 已拍照，正在识别题目文字...';
     await recognizeImage(canvas);
   } catch (e) {
     resultDiv.textContent = '❌ 拍照失败：' + e.message;
@@ -181,7 +208,7 @@ async function takePhotoAndRecognize() {
 }
 
 // ========================
-// 2. 上传图片备用方案（解决摄像头用不了的情况）
+// 3. 上传图片搜题（备用方案）
 // ========================
 uploadBtn.addEventListener('click', () => {
   fileInput.click();
@@ -191,7 +218,7 @@ fileInput.addEventListener('change', async (e) => {
   const file = e.target.files[0];
   if (!file) return;
   
-  resultDiv.textContent = '📤 正在处理图片...';
+  resultDiv.textContent = '📤 正在处理上传的图片...';
   const reader = new FileReader();
   reader.onload = async (event) => {
     const img = new Image();
@@ -208,11 +235,11 @@ fileInput.addEventListener('change', async (e) => {
 });
 
 // ========================
-// 3. OCR 文字识别（优化加载）
+// 4. OCR 文字识别
 // ========================
 async function recognizeImage(canvas) {
   try {
-    // 初始化 Tesseract（中文+英文）
+    // 初始化 Tesseract（中文+英文识别）
     const worker = await Tesseract.createWorker({
       logger: m => {
         // 显示识别进度
@@ -224,7 +251,7 @@ async function recognizeImage(canvas) {
     await worker.loadLanguage('chi_sim+eng');
     await worker.initialize('chi_sim+eng');
     
-    // 识别图片文字
+    // 识别图片中的文字
     const { data: { text } } = await worker.recognize(canvas);
     await worker.terminate(); // 释放资源
     
@@ -233,57 +260,38 @@ async function recognizeImage(canvas) {
       return;
     }
     
-    resultDiv.textContent = `✅ 识别到文字：\n${text}\n\n🔍 正在匹配题库...`;
-    // 匹配题库
+    resultDiv.textContent = `✅ 识别到题目文字：\n${text}\n\n🔍 正在匹配你的题库...`;
+    // 匹配你的题库
     searchQuestion(text.trim());
   } catch (e) {
-    resultDiv.textContent = '❌ 识别失败：' + e.message;
+    resultDiv.textContent = '❌ 文字识别失败：' + e.message;
     console.error('OCR 错误：', e);
   }
 }
 
 // ========================
-// 4. 题库匹配（优化匹配逻辑）
+// 5. 匹配你的题库（无测试数据，仅匹配你的 questions.json）
 // ========================
-let questions = [];
-
-// 页面加载时预加载题库
-window.addEventListener('DOMContentLoaded', async () => {
-  await loadQuestions();
-});
-
-async function loadQuestions() {
-  try {
-    const res = await fetch('./questions.json');
-    if (!res.ok) throw new Error(`题库文件加载失败：${res.status}`);
-    questions = await res.json();
-    if (!Array.isArray(questions)) throw new Error('题库格式错误，必须是数组');
-    resultDiv.textContent = `✅ 已加载 ${questions.length} 道题目，可开始搜题`;
-  } catch (e) {
-    resultDiv.textContent = `⚠️ 题库加载失败：${e.message}\n请检查 questions.json 文件是否存在且格式正确`;
-    console.error('题库加载错误：', e);
-  }
-}
-
-// 模糊匹配题库（优化匹配算法）
 function searchQuestion(ocrText) {
+  // 检查题库是否加载成功
   if (!questions.length) {
-    resultDiv.textContent += '\n\n❌ 题库为空，请检查 questions.json 文件';
+    resultDiv.textContent += '\n\n❌ 你的题库为空或加载失败，请检查 questions.json 文件';
     return;
   }
 
-  // 去除无关字符，只保留关键内容
+  // 清理识别的文字（去除无关字符，提升匹配准确率）
   const cleanOcrText = ocrText.replace(/[\n\r\s]+/g, ' ').replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, ' ').trim();
-  const ocrWords = cleanOcrText.split(/\s+/).filter(w => w.length >= 2); // 只保留长度≥2的词
+  const ocrWords = cleanOcrText.split(/\s+/).filter(w => w.length >= 2); // 仅保留有效关键词
 
   let bestMatch = null;
   let maxScore = 0;
 
-  // 遍历题库匹配
+  // 遍历你的题库进行匹配
   questions.forEach(q => {
-    if (!q.question || !q.answer) return; // 跳过格式错误的题目
+    // 跳过格式不完整的题目（需包含 question 和 answer 字段）
+    if (!q.question || !q.answer) return;
     
-    // 清理题目文字
+    // 清理题库中的题目文字
     const cleanQText = q.question.replace(/[\n\r\s]+/g, ' ').replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, ' ').trim();
     // 计算匹配得分（匹配的关键词数量）
     let score = 0;
@@ -291,35 +299,35 @@ function searchQuestion(ocrText) {
       if (cleanQText.includes(word)) score += 1;
     });
     
-    // 保留得分最高的匹配
-    if (score > maxScore && score >= 2) { // 至少匹配2个关键词
+    // 保留得分最高的匹配结果（至少匹配2个关键词）
+    if (score > maxScore && score >= 2) {
       maxScore = score;
       bestMatch = q;
     }
   });
 
-  // 显示结果
+  // 显示最终匹配结果
   if (bestMatch) {
     resultDiv.textContent = `
-✅ 找到匹配题目（匹配度：${maxScore}）：
+✅ 匹配到题目（匹配度：${maxScore}）：
 【题目】：${bestMatch.question}
 
 【答案】：${bestMatch.answer}
     `.trim();
   } else {
     resultDiv.textContent = `
-✅ 识别到文字：
+✅ 识别到的文字：
 ${ocrText}
 
-❌ 未找到匹配的题目，请检查：
-1. 题目是否在题库中
-2. 识别的文字是否准确（可尝试上传清晰图片）
+❌ 未在你的题库中找到匹配题目，请检查：
+1. 题目是否存在于 questions.json 中
+2. 图片识别的文字是否准确（可尝试重新拍照/上传清晰图片）
     `.trim();
   }
 }
 
 // ========================
-// 5. 页面关闭时清理资源
+// 6. 页面关闭时清理资源
 // ========================
 window.addEventListener('beforeunload', () => {
   if (stream) {
