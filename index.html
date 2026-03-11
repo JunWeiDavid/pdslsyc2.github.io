@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>拍照搜题</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      font-size: 16px;
+    }
+    body {
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    .btn {
+      display: block;
+      width: 100%;
+      padding: 14px;
+      margin: 10px 0;
+      background: #0d6efd;
+      color: white;
+      border: none;
+      border-radius: 8px;
+    }
+    .result {
+      margin-top: 20px;
+      padding: 15px;
+      border: 1px solid #eee;
+      border-radius: 8px;
+    }
+    .answer {
+      color: #0d6efd;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+
+<h2>📷 拍照搜题（单选/多选）</h2>
+
+<button class="btn" onclick="openCamera()">拍照 / 从相册选图</button>
+<input type="file" id="fileInput" accept="image/*" capture="camera" style="display:none">
+
+<div class="result" id="result"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5"></script>
+<script>
+  let questions = [];
+  const result = document.getElementById('result');
+
+  // 加载题库 JSON
+  fetch('./questions.json')
+    .then(res => res.json())
+    .then(data => {
+      questions = data;
+      console.log('题库加载完成，共 ' + questions.length + ' 题');
+    });
+
+  function openCamera() {
+    document.getElementById('fileInput').click();
+  }
+
+  document.getElementById('fileInput').addEventListener('change', async e => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    result.innerHTML = '⌛ 正在识别图片...';
+
+    const { data: { text } } = await Tesseract.recognize(file, 'chi_sim+eng');
+    result.innerHTML = '✅ 识别完成<br>正在匹配题库...';
+
+    const best = searchQuestion(text.trim());
+    showResult(best);
+  });
+
+  // 简单匹配：找包含文字最多的题目
+  function searchQuestion(ocrText) {
+    let best = null;
+    let maxCount = 0;
+
+    questions.forEach(q => {
+      const title = q.title || '';
+      const words = ocrText.split(/\s+/).filter(w => w.length > 2);
+      let count = 0;
+      words.forEach(w => {
+        if (title.includes(w)) count++;
+      });
+      if (count > maxCount) {
+        maxCount = count;
+        best = q;
+      }
+    });
+    return best;
+  }
+
+  function showResult(q) {
+    if (!q) {
+      result.innerHTML = '❌ 未找到匹配题目';
+      return;
+    }
+
+    let html = `<h3>${q.title}</h3>`;
+    q.options.forEach(opt => {
+      html += `<p>${opt}</p>`;
+    });
+    html += `<p class="answer">答案：${q.answer}</p>`;
+    result.innerHTML = html;
+  }
+</script>
+</body>
+</html>
