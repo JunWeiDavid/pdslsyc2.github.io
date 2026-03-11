@@ -289,11 +289,11 @@ function searchQuestion(ocrText) {
 
   // 遍历你的题库进行匹配
   questions.forEach(q => {
-    // 跳过格式不完整的题目（需包含 question 和 answer 字段）
-    if (!q.question || !q.answer) return;
+    // 跳过格式不完整的题目（需包含 title 和 answer 字段）
+    if (!q.title || !q.answer) return;
     
-    // 清理题库中的题目文字
-    const cleanQText = q.question.replace(/[\n\r\s]+/g, ' ').replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, ' ').trim();
+    // 【优化】清理题库中的题目文字（使用 title 字段）
+    const cleanQText = q.title.replace(/[\n\r\s]+/g, ' ').replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, ' ').trim();
     // 计算匹配得分（匹配的关键词数量）
     let score = 0;
     ocrWords.forEach(word => {
@@ -309,10 +309,17 @@ function searchQuestion(ocrText) {
 
   // 显示最终匹配结果
   if (bestMatch) {
+    // 【优化】显示题目类型和完整选项
+    let optionsText = '';
+    for (const [key, value] of Object.entries(bestMatch.options)) {
+      optionsText += `\n${key}：${value}`;
+    }
+    
     resultDiv.textContent = `
 ✅ 匹配到题目（匹配度：${maxScore}）：
-【题目】：${bestMatch.question}
-
+【类型】：${bestMatch.type}
+【题目】：${bestMatch.title}
+【选项】：${optionsText}
 【答案】：${bestMatch.answer}
     `.trim();
   } else {
@@ -339,4 +346,5 @@ window.addEventListener('beforeunload', () => {
 
 </body>
 </html>
+
 
