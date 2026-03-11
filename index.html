@@ -135,22 +135,86 @@ window.addEventListener('DOMContentLoaded', async () => {
   ]);
 });
 
-// 预初始化OCR Worker（关键优化：只初始化一次）
+// 全局变量新增
+let ocrInitAttempts = 0; // 初始化重试次数
+const MAX_OCR_INIT_ATTEMPTS = 3; // 最大重试次数
+
+// 预初始化OCR Worker（带重试+降级）
 async function initOcrWorker() {
+  // 避免重复重试
+  if (ocrInitAttempts >= MAX_OCR_INIT_ATTEMPTS) {
+    resultDiv.textContent = '❌ OCR初始化重试次数耗尽，请检查网络后刷新页面';
+    return;
+  }
+  ocrInitAttempts++;
+
   try {
+    resultDiv.textContent = `🔧 正在初始化OCR（第${ocrInitAttempts}次）...`;
     ocrWorker = await Tesseract.createWorker({
       logger: m => {
         if (m.status === 'recognizing text') {
           resultDiv.textContent = `📝 识别中：${Math.round(m.progress * 100)}%`;
         }
       },
-      cachePath: './tesseract-cache' // 缓存语言包，避免重复下载
+      // 配置国内可访问的CDN
+      corePath: 'https://cdn.staticfile.org/tesseract.js-core/5.0.0/tesseract-core.wasm.js',
+      langPath: 'https://cdn.staticfile.org/tesseract.js/5.0.0/lang-data',
+      cachePath: './tesseract-cache',
+      timeout: 10000 // 超时时间10秒
     });
-    await ocrWorker.loadLanguage('chi_sim+eng');
-    await ocrWorker.initialize('chi_sim+eng');
+
+    // 先加载英文（更小，更快，优先保证可用）
+    await ocrWorker.loadLanguage('eng');
+    await ocrWorker.initialize('eng');
+    
+    // 尝试加载中文（失败也不影响基础功能）
+    try {
+      await ocrWorker.loadLanguage('chi_sim');
+      await ocrWorker.initialize('chi_sim+eng');
+      resultDiv.textContent = '✅ OCR初始化成功（中文+英文模式）';
+    } catch (e) {
+      resultDiv.textContent = '⚠️ 中文语言包加载失败，仅支持英文识别：' + e.message;
+    }
   } catch (e) {
-    resultDiv.textContent = `⚠️ OCR初始化失败：${e.message}`;
-    console.error('OCR初始化错误：', e);
+    resultDiv.textContent = `⚠️ OCR初始化失败（第${ocrInitAttempts}次）：${e.message}`;
+    console.error('OCR初始化错误详情：', e);
+    // 1秒后重试
+    setTimeout(initOcrWorker, 1000);
+  }
+}
+
+// 优化识别函数（增加初始化重试）
+async function recognizeImage(canvas) {
+  try {
+    // 检查OCR Worker是否初始化成功，未成功则尝试重新初始化
+    if (!ocrWorker) {
+      resultDiv.textContent = '🔧 OCR未初始化，正在重试...';
+      await initOcrWorker();
+      // 重试后仍失败，提示用户
+      if (!ocrWorker) {
+        resultDiv.textContent = '❌ OCR初始化失败，请检查：\n1. 网络是否正常\n2. 是否在HTTPS环境运行\n3. 浏览器是否支持Web Worker';
+        return;
+      }
+    }
+    
+    // 识别图片
+    const { data: { text } } = await ocrWorker.recognize(canvas);
+    
+    if (!text.trim()) {
+      resultDiv.textContent = '❌ 未识别到任何文字，请确保题目清晰、光线充足';
+      return;
+    }
+    
+    resultDiv.textContent = `✅ 识别到题目文字：\n${text}\n\n🔍 正在快速匹配题库...`;
+    searchQuestion(text.trim());
+  } catch (e) {
+    resultDiv.textContent = '❌ 文字识别失败：' + e.message;
+    console.error('OCR 错误：', e);
+    // 识别失败后重置Worker，下次重新初始化
+    if (ocrWorker) {
+      await ocrWorker.terminate();
+      ocrWorker = null;
+    }
   }
 }
 
@@ -392,3 +456,4 @@ window.addEventListener('beforeunload', () => {
 
 </body>
 </html>
+
