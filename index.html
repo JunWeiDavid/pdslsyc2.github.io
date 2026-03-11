@@ -120,17 +120,18 @@ async function loadQuestions() {
     const res = await fetch('./questions.json');
     if (!res.ok) throw new Error(`题库文件加载失败，状态码：${res.status}`);
     
-    // 解析你的题库数据
-    questions = await res.json();
+    // 【关键修复】读取根对象中的 questions 数组
+    const data = await res.json();
+    questions = data.questions; // 原代码是 questions = await res.json()
     
     // 验证题库格式（确保是数组）
-    if (!Array.isArray(questions)) throw new Error('题库格式错误，必须是 JSON 数组');
+    if (!Array.isArray(questions)) throw new Error('题库格式错误，必须是包含 questions 数组的 JSON 对象');
     
     // 提示加载成功
     resultDiv.textContent = `✅ 已成功加载你的题库，共 ${questions.length} 道题目，可开始搜题`;
   } catch (e) {
     // 明确提示题库加载问题
-    resultDiv.textContent = `⚠️ 题库加载失败：${e.message}\n请检查：1. questions.json 是否和 index.html 在同一目录 2. 文件格式是否为合法 JSON 数组`;
+    resultDiv.textContent = `⚠️ 题库加载失败：${e.message}\n请检查：1. questions.json 是否和 index.html 在同一目录 2. 文件格式是否为合法 JSON（包含 questions 数组）`;
     console.error('题库加载错误详情：', e);
   }
 }
@@ -338,3 +339,4 @@ window.addEventListener('beforeunload', () => {
 
 </body>
 </html>
+
